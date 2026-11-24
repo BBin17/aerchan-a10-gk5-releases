@@ -2,6 +2,8 @@
 
 加密升级包通过本仓库的 [Releases](https://github.com/BBin17/aerchan-a10-gk5-releases/releases) 发布。仅适用于已完成加密首刷的 AerChan A10 GK5（ESP32-S3）。
 
+v1.0.12 正在等待实机验证。正式固件发布后，升级包会出现在 Release 附件中。
+
 ## 用手机更新
 
 1. 在手机上的 Safari 或 Chrome 打开 Releases，找到适用版本的 `.a10fw` 附件，下载到手机的「文件」或「下载」目录。
