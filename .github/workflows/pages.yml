@@ -1,10 +1,10 @@
-name: Publish AerChan Bluetooth updater
+name: Publish AerChan firmware downloads
 on:
   push:
     branches: [main]
     paths: [site/**, .github/workflows/pages.yml]
   release:
-    types: [published, released, edited, deleted, unpublished]
+    types: [published, edited, deleted, unpublished]
   workflow_dispatch:
 permissions: {}
 concurrency:
