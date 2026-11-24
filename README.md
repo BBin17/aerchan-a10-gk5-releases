@@ -1,16 +1,13 @@
 # AerChan A10 GK5 固件
 
-加密升级包通过本仓库的 [Releases](https://github.com/BBin17/aerchan-a10-gk5-releases/releases) 发布。仅适用于已完成加密首刷的 AerChan A10 GK5（ESP32-S3）。
-
-v1.0.12 正在等待实机验证。正式固件发布后，升级包会出现在 Release 附件中。
+[打开手机蓝牙工具](https://bbin17.github.io/aerchan-a10-gk5-releases/)。设备首次启用加密时需要通过 USB 安装支持加密升级的固件。
 
 ## 用手机更新
 
-1. 在手机上的 Safari 或 Chrome 打开 Releases，找到适用版本的 `.a10fw` 附件，下载到手机的「文件」或「下载」目录。
-2. 给转速灯稳定供电，发动机保持熄火。手机连接转速灯的 `ZyRacing-RPM` Wi-Fi。
-3. 在浏览器打开设备设置页 `http://192.168.4.1/`，进入「固件更新」，选择刚下载的 `.a10fw`，输入设备热点密码，点「上传并更新」。
-4. 等待设备重启，重新连接热点并刷新页面，确认页底的固件版本。
+1. 在安卓 Chrome 或 iPhone Bluefy 打开蓝牙工具，连接 **AerChan-RPM**。
+2. 页面自动检查 GitHub Release。发现新版时，点「下载并通过蓝牙更新」。
+3. 保持设备供电并让发动机熄火，页面留在前台。完成后重新连接并确认版本。
 
-旧固件需要先通过 USB 完成一次加密首刷。首刷由设备提供方完成。设备会解密升级包并校验固件签名，通过后才切换到新版本。
+正式发布的加密 `.a10fw` 也可从 [Releases](https://github.com/BBin17/aerchan-a10-gk5-releases/releases) 下载，保存到手机后通过转速灯的 Wi-Fi 设置页上传。设备校验签名后才会启动新版。
 
 技术支持微信 AerChanBBin17

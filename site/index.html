@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#0c1422">
+<title>AerChan A10 蓝牙工具</title>
+<style>
+:root { color-scheme:dark; font:16px/1.55 system-ui,"PingFang SC",sans-serif; color:#eff4ff; background:#0c1422; }
+* { box-sizing:border-box; } body { max-width:800px; margin:auto; padding:18px 16px 48px; }
+header, .row { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
+header { border-bottom:1px solid #324359; padding-bottom:14px; } header b { font:italic 800 26px system-ui; letter-spacing:-.06em; }
+h1 { font-size:28px; margin:22px 0 14px; } h2,summary { font-size:18px; margin:0; font-weight:650; } h3 { font-size:16px; margin:0; }
+section,details { margin:12px 0; padding:16px; background:#142034; border:1px solid #324359; border-radius:10px; }
+p { margin:8px 0; } .hint, label, #connection, .feedback { color:#b5c3d8; font-size:14px; }
+button { font:inherit; padding:8px 13px; min-height:44px; border:1px solid #526481; border-radius:6px; color:#eff4ff; background:#243957; cursor:pointer; }
+.primary { background:#b2c4ff; color:#101b36; font-weight:650; } button:disabled,input:disabled { opacity:.55; cursor:default; } a { color:#c1d1ff; }
+.range { margin:10px 0 0; border-top:1px solid #324359; padding:12px 0 0; }
+.fields { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin:8px 0; }
+input { width:100%; font:16px ui-monospace,monospace; padding:8px; color:#eff4ff; background:#0c1422; border:1px solid #475b76; border-radius:4px; }
+footer { color:#b5c3d8; margin-top:24px; } .name-field { display:flex; align-items:end; gap:8px; margin:10px 0; } .name-field label { flex:1; } .name-field input { display:block; } progress { width:100%; } summary { cursor:pointer; }
+</style></head><body>
+<header><b>AerChan</b><span>A10 / GK5</span></header>
+<h1>蓝牙工具</h1>
+<section><div class="row"><div><h2>设备连接</h2><p id="connection" role="status">尚未连接</p></div>
+<button type="button" class="primary" id="connect">连接转速灯</button></div>
+<details><summary>第一次怎么配对？</summary>
+<p>给转速灯通电，用安卓 Chrome 或 iPhone 的 Bluefy 打开本页。点「连接转速灯」，选择 <strong>AerChan-RPM</strong>，按系统提示输入设备配对码。</p>
+<p class="hint">旧固件可能显示为 ZyRacing A10。加密升级需要设备先完成一次 USB 首刷。</p></details>
+<p class="hint" id="compat" role="status"></p></section>
+<section><h2>转速阈值</h2><p class="hint">单位 RPM。可分别保存每组的名称和三个转速，点「启用」切换。</p><div id="ranges"></div></section>
+<section><div class="row"><h2>蓝牙固件更新</h2><button type="button" id="check" disabled>检查更新</button></div>
+<p id="message" class="hint" role="status">连接转速灯后自动检查最新固件。</p>
+<p class="hint">更新时请熄火、保持设备供电，并让手机停留在本页。</p>
+<div class="row"><button type="button" class="primary" id="send" hidden disabled>下载并通过蓝牙更新</button><button type="button" id="cancel" hidden>取消更新</button></div>
+<progress id="progress" max="100" value="0" hidden></progress></section>
+<footer>技术支持微信 AerChanBBin17</footer>
+<script>
+'use strict';
+const byId = id => document.getElementById(id);
+const uuid = n => '77a10000-8e24-4391-92fc-3974db9000' + n.toString(16).padStart(2,'0');
+const decoder = new TextDecoder();
+const encoder = new TextEncoder();
+let device = null, service = null, ctl = null, data = null;
+let generation = 0, busy = false, sending = false, cancelling = false, committing = false, active = 0;
+const chars = new Map();
+const releaseRoot = 'https://bbin17.github.io/aerchan-a10-gk5-releases/firmware/';
+let deviceVersion = '', available = null, checking = false, accepted = false, network = null;
+
+const checkName = value => value.length > 0 && encoder.encode(value).length <= 20 && !/[\u0000-\u001f\u007f-\u009f]/u.test(value);
+const rows = Array.from({length:3},(_,i)=>{
+  const el=document.createElement('div');
+  el.className='range';
+  el.innerHTML='<div class="row"><h3>预设 '+(i+1)+'</h3><button type="button" class="activate">启用</button></div><div class="name-field"><label>预设名称<input class="name" maxlength="20" autocomplete="off"></label><button type="button" class="rename">保存名称</button></div><div class="fields"></div><div class="row"><span class="feedback" role="status"></span><button type="button" class="save">保存阈值</button></div>';
+  const inputs=['起亮','全亮','爆闪'].map((name,j)=>{
+    const label=document.createElement('label'), input=document.createElement('input');
+    label.textContent=name; input.type='number'; input.inputMode='numeric'; input.min=250+j; input.max=12000; input.required=true;
+    input.setAttribute('aria-label','预设 '+(i+1)+' '+name+'转速');
+    label.append(input); el.querySelector('.fields').append(label); return input;
+  });
+  byId('ranges').append(el);
+  const save=el.querySelector('.save'), activate=el.querySelector('.activate'), feedback=el.querySelector('.feedback');
+  save.onclick=()=>editRange(i,false);
+  activate.onclick=()=>editRange(i,true);
+  const name=el.querySelector('.name'), rename=el.querySelector('.rename');
+  name.value='预设 '+(i+1);
+  name.setAttribute('aria-label','预设 '+(i+1)+' 名称');
+  rename.onclick=()=>renamePreset(i);
+  return {inputs,save,activate,feedback,name,rename,title:el.querySelector('h3')};
+});
+const message = text=>{byId('message').textContent=text;};
+function controls() {
+  const connected = Boolean(service);
+  byId('connect').disabled=busy || (!connected && !navigator.bluetooth);
+  byId('connect').textContent=connected?'断开连接':'连接转速灯';
+  rows.forEach((row,i)=>{
+    row.inputs.forEach(inp=>inp.disabled=busy||!connected);
+    row.save.disabled=busy||!connected;
+    row.name.disabled=row.rename.disabled=busy||!connected||!chars.has(uuid(15+i));
+    row.activate.disabled=busy||!connected||i+1===active;
+    row.activate.textContent=i+1===active?'使用中':'启用';
+  });
+  byId('check').disabled=busy||checking||!connected||accepted;
+  byId('send').hidden=!available||!ctl||accepted;
+  byId('send').disabled=busy||checking||!available||!ctl||accepted;
+  byId('cancel').hidden=!sending||committing;
+  byId('cancel').disabled=cancelling;
+}
+function disconnected(event) {
+  if (event && event.target!==device) return;
+  ++generation;
+  if(device)device.removeEventListener('gattserverdisconnected',disconnected);
+  network?.abort();
+  if(accepted)message('设备已接受更新，重启后请重新连接以核对版本。');
+  else if(sending)message(committing?'连接已断开，请重连核对固件版本。':'传输中断。重新连接后可从头上传。');
+  else message('连接转速灯后自动检查最新固件。');
+  deviceVersion='';available=null;checking=accepted=false;network=null;
+  byId('progress').hidden=true;
+  device=service=ctl=data=null; chars.clear(); active=0; busy=sending=cancelling=committing=false;
+  rows.forEach((row,i)=>{row.title.textContent=row.name.value='预设 '+(i+1);row.inputs.forEach(x=>x.value='');row.feedback.textContent='';});
+  byId('connection').textContent='尚未连接'; controls();
+}
+const readText=async ch=>decoder.decode(await ch.readValue());
+async function write(ch,bytes) {
+  if (typeof ch.writeValueWithResponse==='function') await ch.writeValueWithResponse(bytes);
+  else await ch.writeValue(bytes);
+}
+function checkSession(id){if(id!==generation || !device?.gatt.connected)throw Error('蓝牙已断开');}
+function validRange(v){return v.length===3 && v.every(Number.isInteger) && v[0]>=250 && v[0]<v[1] && v[1]<v[2] && v[2]<=12000;}
+byId('connect').onclick=async()=>{
+  if(service){device.gatt.disconnect();return;}
+  const id=++generation; busy=true; controls();
+  byId('connection').textContent='请选择 AerChan-RPM，首次连接按系统提示配对。';
+  try {
+    const picked=await navigator.bluetooth.requestDevice({filters:[{services:[uuid(0)]}]});
+    if(id!==generation)return;
+    device=picked; device.addEventListener('gattserverdisconnected',disconnected);
+    const server=await device.gatt.connect();
+    const found=await server.getPrimaryService(uuid(0));
+    const list=await found.getCharacteristics(); checkSession(id);
+    for(const ch of list)chars.set(ch.uuid.toLowerCase(),ch);
+    const field=n=>{const ch=chars.get(uuid(n)); if(!ch)throw Error('设备缺少调参服务');return ch;};
+    const current=Number(await readText(field(2))); // The protected read triggers pairing when needed.
+    const version=await readText(field(11));
+    const ranges=[];
+    for(let i=0;i<3;i++)ranges.push((await readText(field(i+3))).split(',').map(Number));
+    const names=[];
+    for(let i=0;i<3;i++) {
+      const name=chars.get(uuid(15+i));
+      names.push(name ? await readText(name) : '预设 '+(i+1));
+    }
+    checkSession(id);
+    if(![1,2,3].includes(current)||!ranges.every(validRange))throw Error('设备返回了无效预设');
+    active=current;
+    names.forEach((name,i)=>{rows[i].title.textContent=rows[i].name.value=name;});
+    deviceVersion=version;
+    ranges.forEach((values,i)=>values.forEach((v,j)=>rows[i].inputs[j].value=v));
+    service=found; ctl=chars.get(uuid(13)); data=chars.get(uuid(14)); if(!data)ctl=null;
+    byId('connection').textContent='已连接 · '+version;
+    if(!chars.has(uuid(15))) rows.forEach(row=>row.feedback.textContent='升级至 v1.0.11 后可修改名称。');
+    checkUpdates();
+  } catch(error) {
+    if(id!==generation)return;
+    const peer=device;
+    disconnected();
+    if(peer?.gatt?.connected)peer.gatt.disconnect();
+    byId('connection').textContent=error.name==='NotFoundError'?'未选择设备，或设备未通电。':'连接失败，请核对配对码并重试。'+error.message;
+  } finally {if(id===generation){busy=false;controls();}}
+};
+async function editRange(index,activate) {
+  if(busy||!service)return;
+  const row=rows[index],values=row.inputs.map(x=>x.valueAsNumber);
+  if(!activate&&!validRange(values)){row.feedback.textContent='请填写递增的三个转速（250–12000 RPM）。';return;}
+  const id=generation;busy=true;controls();
+  try{
+    const ch=chars.get(uuid(activate?2:index+3));
+    const value=activate?String(index+1):values.join(',');
+    await write(ch,encoder.encode(value));
+    const confirmed=await readText(ch);checkSession(id);
+    if(confirmed!==value) throw Error('读回值与提交值不同');
+    if(activate)active=index+1;
+    row.feedback.textContent=activate?'已启用':'阈值已保存';
+  }catch(e){if(id===generation)row.feedback.textContent='操作失败。'+e.message;}
+  finally{if(id===generation){busy=false;controls();}}
+}
+async function renamePreset(index) {
+  const row=rows[index], name=row.name.value.trim(), ch=chars.get(uuid(15+index));
+  if(busy||!service||!ch)return;
+  if(!checkName(name)){row.feedback.textContent='名称可用 1–20 个 UTF-8 字节，通常最多 6 个汉字。';return;}
+  const id=generation;busy=true;controls();
+  try {
+    await write(ch,encoder.encode(name));
+    const stored=await readText(ch);checkSession(id);
+    if(stored!==name)throw Error('读回的名称不同');
+    row.name.value=row.title.textContent=stored;row.feedback.textContent='名称已保存到转速灯';
+  } catch(e){if(id===generation)row.feedback.textContent='保存失败。'+e.message;}
+  finally{if(id===generation){busy=false;controls();}}
+}
+
+function isNewer(tag,current) {
+  const latest=/^v(\d{1,5})\.(\d{1,5})\.(\d{1,5})$/.exec(tag);
+  const installed=/^A10 GK5 v(\d{1,5})\.(\d{1,5})\.(\d{1,5})$/.exec(current);
+  if(!latest||!installed)throw Error('无法识别固件型号或版本');
+  for(let i=1;i<=3;i++)if(+latest[i]!==+installed[i])return +latest[i]>+installed[i];
+  return false;
+}
+
+async function fromUpdateService(url,read,timeout) {
+  const controller=new AbortController();
+  network=controller;
+  const timer=setTimeout(()=>controller.abort(),timeout);
+  try {
+    const response=await fetch(url,{signal:controller.signal,cache:'no-store',credentials:'omit',redirect:'error',referrerPolicy:'no-referrer'});
+    if(!response.ok)throw Error('更新服务 HTTP '+response.status);
+    return await read(response);
+  } finally {
+    clearTimeout(timer);
+    if(network===controller)network=null;
+  }
+}
+
+async function checkUpdates() {
+  if(!service||checking||sending)return;
+  const id=generation;
+  checking=true;available=null;controls();message('正在检查已发布的最新固件…');
+  try {
+    const release=await fromUpdateService(releaseRoot+'latest.json',r=>r.json(),15000);
+    checkSession(id);
+    if(release.model==='A10-GK5' && release.unreleased===true){message('公开仓库暂无加密固件发布。');return;}
+    const tag=release.tag;
+    if(release.model!=='A10-GK5'||!/^v\d{1,5}\.\d{1,5}\.\d{1,5}$/.test(tag))throw Error('发布的固件型号或版本无效');
+    if(!isNewer(tag,deviceVersion)){message('当前固件 '+deviceVersion+' 已是最新版本。');return;}
+    if (!ctl || isNewer('v1.0.13',deviceVersion)) {
+      message('发现 '+tag+'。请先用 USB 安装支持加密蓝牙升级的固件。');return;
+    }
+    if(!Number.isInteger(release.size)||release.size<=512||release.size>0x1e0200||
+       !/^[0-9a-f]{64}$/.test(release.digest))throw Error('该版本缺少可校验的 A10 GK5 加密升级包');
+    available={tag,size:release.size,digest:release.digest,url:releaseRoot+'AerChan-A10-GK5-'+tag+'.a10fw'};
+    message('发现新版 '+tag+' · 当前 '+deviceVersion+'。');
+  } catch(e){if(id===generation)message('检查失败，可点「检查更新」重试。'+e.message);}
+  finally{if(id===generation){checking=false;controls();}}
+}
+
+async function downloadImage(release) {
+  const bytes=new Uint8Array(await fromUpdateService(release.url,r=>r.arrayBuffer(),90000));
+  if(bytes.length!==release.size)throw Error('下载大小与发布包不一致');
+  const hash=new Uint8Array(await crypto.subtle.digest('SHA-256',bytes));
+  const digest=Array.from(hash,n=>n.toString(16).padStart(2,'0')).join('');
+  if(digest!==release.digest)throw Error('下载包 SHA-256 校验失败');
+  return bytes;
+}
+const reasons={busy:'设备正在休眠、发动机有转速或已有升级任务',slot:'没有备用分区',size:'文件大小不符合要求',image:'固件型号或镜像格式不匹配',write:'备用分区写入失败',sequence:'分块顺序错误',verify:'镜像校验失败',activate:'启动分区切换失败',engine:'检测到发动机转速',timeout:'传输超时',cancelled:'已取消'};
+async function upload() {
+  if(busy||checking||!ctl||!available||accepted)return;
+  const release=available;
+  const id=generation, control=ctl, payload=data; let acquired=false;
+  busy=sending=true; cancelling=committing=false;controls();
+  const progress=byId('progress');progress.hidden=false;progress.value=0;
+  try {
+    message('正在下载并校验 '+release.tag+'…');
+    const bytes=await downloadImage(release), view=new DataView(bytes.buffer);
+    checkSession(id);
+    if(cancelling)throw Error('已取消');
+    if(view.getUint32(0,true)!==0x0788b6cf||view.getUint32(404,true)!==bytes.length-512)throw Error('文件不是 A10 GK5 加密升级包');
+    checkSession(id);
+    const start=new Uint8Array(5);start[0]=1;new DataView(start.buffer).setUint32(1,bytes.length,true);
+    await write(control,start);acquired=true;
+    const [state,offset,maximum]=(await readText(control)).split(' ');
+    const chunk=Math.min(480,Number(maximum));
+    if(state!=='rx'||offset!=='0'||!Number.isInteger(chunk)||chunk<1)throw Error('设备未确认传输参数');
+    for(let at=0;at<bytes.length;at+=chunk) {
+      checkSession(id); if(cancelling)throw Error('已取消');
+      const part=bytes.subarray(at,at+chunk),packet=new Uint8Array(4+part.length);
+      new DataView(packet.buffer).setUint32(0,at,true);packet.set(part,4);
+      await write(payload,packet);
+      const percent=Math.floor((at+part.length)*100/bytes.length);
+      if(percent!==progress.value||at===0){progress.value=percent;message('正在通过蓝牙传输 · '+percent+'%');}
+    }
+    checkSession(id);if(cancelling)throw Error('已取消');
+    committing=true;controls();message('设备正在校验应用包。');
+    await write(control,Uint8Array.of(2));
+    acquired=false;checkSession(id);
+    sending=false;accepted=true;available=null;
+    message('设备已接受更新，正在重启。请重新连接并核对固件版本。');
+  } catch(e) {
+    if(id!==generation)return;
+    let detail=e.message;
+    try {
+      const status=acquired && (await readText(control)).split(' ')[0];
+      if(reasons[status])detail=reasons[status];
+      if(acquired)await write(control,Uint8Array.of(3));
+    } catch {}
+    if(id===generation)message(cancelling?'已取消更新。':'更新未确认。'+detail+'。');
+  } finally {
+    if(id===generation){busy=sending=cancelling=committing=false;controls();}
+  }
+}
+byId('check').onclick=checkUpdates;byId('send').onclick=upload;byId('cancel').onclick=()=>{cancelling=true;network?.abort();controls();};
+if(!navigator.bluetooth)byId('compat').textContent='此浏览器无法访问蓝牙。iPhone 请用 Bluefy，安卓请用 Chrome 打开本页。';
+controls();
+</script></body></html>

@@ -1,0 +1,63 @@
+name: Publish AerChan Bluetooth updater
+on:
+  push:
+    branches: [main]
+    paths: [site/**, .github/workflows/pages.yml]
+  release:
+    types: [published, released, edited, deleted, unpublished]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: aerchan-gk5-pages
+  cancel-in-progress: false
+jobs:
+  pages:
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/configure-pages@v5
+      - name: Prepare encrypted release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir site/firmware
+          gh api "repos/$GITHUB_REPOSITORY/releases" > releases.json
+          if ! jq -e 'any(.[]; (.draft or .prerelease) | not)' releases.json > /dev/null; then
+            printf '%s\n' '{"model":"A10-GK5","unreleased":true}' > site/firmware/latest.json
+            exit 0
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/releases/latest" > release.json
+          tag=$(jq -er '.tag_name | select(test("^v[0-9]{1,5}\\.[0-9]{1,5}\\.[0-9]{1,5}$"))' release.json)
+          name="AerChan-A10-GK5-${tag}.a10fw"
+          gh release download "$tag" --pattern "$name" --dir site/firmware
+          python3 - "$tag" "$name" <<'PY'
+          from pathlib import Path
+          import hashlib, json, struct, sys
+          tag, name = sys.argv[1:]
+          dest = Path('site/firmware')
+          package = (dest / name).read_bytes()
+          release = json.loads(Path('release.json').read_text())
+          asset, = [item for item in release['assets'] if item['name'] == name and item['state'] == 'uploaded']
+          length, digest = len(package), hashlib.sha256(package).hexdigest()
+          if not 512 < length <= 0x1e0200 or package[:4] != bytes.fromhex('cfb68807'):
+              raise ValueError('Expected a pre-encrypted A10 firmware package')
+          if struct.unpack_from('<I', package, 404)[0] != length - 512:
+              raise ValueError('Invalid pre-encrypted image length')
+          if asset['size'] != length or asset['digest'] != 'sha256:' + digest:
+              raise ValueError('GitHub asset size or SHA-256 mismatch')
+          (dest / 'latest.json').write_text(json.dumps(
+              dict(model='A10-GK5', tag=tag, size=length, digest=digest)
+          ))
+          PY
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4
