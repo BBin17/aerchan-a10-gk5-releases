@@ -22,6 +22,8 @@
     [hidden] { display:none !important; }
     ol { margin:0; padding-inline-start:22px; }
     li + li { margin-top:6px; }
+    details { margin-top:12px; }
+    summary { cursor:pointer; }
     footer { margin-top:20px; }
   </style>
 </head>
@@ -42,10 +44,14 @@
       <h2 id="update-title">通过 Wi‑Fi 更新</h2>
       <ol>
         <li>手机联网时下载 <strong>.a10fw</strong>，保存到「文件」或「下载」。</li>
-        <li>给转速灯稳定供电，保持熄火。手机连接 <strong>ZyRacing-RPM</strong> Wi‑Fi。</li>
-        <li>用 Safari 或 Chrome 打开 <a href="http://192.168.4.1/">设备设置页</a>。展开「固件更新」，选好下载的文件，输入热点密码，点「上传并更新」。</li>
-        <li>等设备重启，重新连接热点并刷新页面，核对页底的固件版本。</li>
+        <li>给转速灯稳定供电，保持熄火。手机连接 <strong>AerChan-RPM</strong> Wi‑Fi。</li>
+        <li>用 Safari 或 Chrome 打开 <a href="http://192.168.11.1/">设备设置页</a>。展开「固件更新」，选好下载的文件，输入热点密码，点「上传并更新」。</li>
+        <li>设备重启后，重新连接热点并打开设置页，核对页底版本。</li>
       </ol>
+      <details class="muted">
+        <summary>从 v1.0.15 更新</summary>
+        <p>升级前连原热点 <strong>ZyRacing-RPM</strong>，在 <a href="http://192.168.4.1/">旧设置页</a>上传。重启后切换到新热点和新地址。</p>
+      </details>
     </section>
   </main>
   <footer>技术支持微信 AerChanBBin17</footer>
