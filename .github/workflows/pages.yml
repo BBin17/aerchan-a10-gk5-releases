@@ -6,15 +6,27 @@ on:
   release:
     types: [published, released, edited, deleted, unpublished]
   workflow_dispatch:
-permissions:
-  contents: read
-  pages: write
-  id-token: write
+permissions: {}
 concurrency:
   group: aerchan-gk5-pages
   cancel-in-progress: false
 jobs:
+  refresh-from-main:
+    if: github.event_name == 'release'
+    permissions:
+      actions: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Queue deployment from main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref main
   pages:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'release'
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
