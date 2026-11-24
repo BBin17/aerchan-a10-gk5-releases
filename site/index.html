@@ -11,10 +11,23 @@ section,details { margin:12px 0; padding:16px; background:#142034; border:1px so
 p { margin:8px 0; } .hint, label, #connection, .feedback { color:#b5c3d8; font-size:14px; }
 button { font:inherit; padding:8px 13px; min-height:44px; border:1px solid #526481; border-radius:6px; color:#eff4ff; background:#243957; cursor:pointer; }
 .primary { background:#b2c4ff; color:#101b36; font-weight:650; } button:disabled,input:disabled { opacity:.55; cursor:default; } a { color:#c1d1ff; }
-.range { margin:10px 0 0; border-top:1px solid #324359; padding:12px 0 0; }
-.fields { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin:8px 0; }
+.range { border-top:1px solid #324359; padding:10px 0; }
+.range:first-child { margin-top:10px; }
+.range:last-child { padding-bottom:0; }
+.range .row { gap:8px; }
+.preset-info { flex:1 1 120px; min-width:0; overflow-wrap:anywhere; }
+.preset-actions { display:flex; gap:6px; }
+.preset-summary { margin:2px 0 0; color:#b5c3d8; font-size:13px; font-variant-numeric:tabular-nums; }
+.activate.in-use { color:#a0e5c9; opacity:1; }
+.range > .feedback:empty, #preset-feedback:empty { display:none; }
+.fields { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin:12px 0; }
 input { width:100%; font:16px ui-monospace,monospace; padding:8px; color:#eff4ff; background:#0c1422; border:1px solid #475b76; border-radius:4px; }
-footer { color:#b5c3d8; margin-top:24px; } .name-field { display:flex; align-items:end; gap:8px; margin:10px 0; } .name-field label { flex:1; } .name-field input { display:block; } progress { width:100%; } summary { cursor:pointer; }
+dialog { width:min(420px,calc(100% - 32px)); max-height:calc(100% - 32px); padding:18px; color:inherit; background:#142034; border:1px solid #526481; border-radius:10px; }
+dialog::backdrop { background:#080d16c7; }
+dialog h2 { margin-bottom:12px; }
+dialog input { display:block; margin-top:4px; }
+.editor-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }
+footer { color:#b5c3d8; margin-top:24px; } progress { width:100%; } summary { cursor:pointer; }
 </style></head><body>
 <header><b>AerChan</b><span>A10 / GK5</span></header>
 <h1>蓝牙工具</h1>
@@ -24,7 +37,20 @@ footer { color:#b5c3d8; margin-top:24px; } .name-field { display:flex; align-ite
 <p>给转速灯通电，用安卓 Chrome 或 iPhone 的 Bluefy 打开本页。点「连接转速灯」，选择 <strong>AerChan-RPM</strong>，按系统提示输入设备配对码。</p>
 <p class="hint">旧固件可能显示为 ZyRacing A10。加密升级需要设备先完成一次 USB 首刷。</p></details>
 <p class="hint" id="compat" role="status"></p></section>
-<section><h2>转速阈值</h2><p class="hint">单位 RPM。可分别保存每组的名称和三个转速，点「启用」切换。</p><div id="ranges"></div></section>
+<section><h2>转速阈值</h2><p class="hint">起亮 / 全亮 / 爆闪（RPM）</p><div id="ranges"></div></section>
+<dialog id="preset-editor" aria-labelledby="preset-title">
+<form id="preset-form">
+<h2 id="preset-title">编辑预设</h2>
+<label>预设名称<input id="preset-name" type="text" maxlength="20" autocomplete="off"></label>
+<div class="fields">
+<label>起亮<input type="number" inputmode="numeric" min="250" max="12000" required></label>
+<label>全亮<input type="number" inputmode="numeric" min="250" max="12000" required></label>
+<label>爆闪<input type="number" inputmode="numeric" min="250" max="12000" required></label>
+</div>
+<p id="preset-feedback" class="feedback" role="status"></p>
+<div class="editor-actions"><button type="button" id="preset-cancel">取消</button><button class="primary" type="submit" id="preset-save">保存预设</button></div>
+</form>
+</dialog>
 <section><div class="row"><h2>蓝牙固件更新</h2><button type="button" id="check" disabled>检查更新</button></div>
 <p id="message" class="hint" role="status">连接转速灯后自动检查最新固件。</p>
 <p class="hint">更新时请熄火、保持设备供电，并让手机停留在本页。</p>
@@ -42,40 +68,47 @@ let generation = 0, busy = false, sending = false, cancelling = false, committin
 const chars = new Map();
 const releaseRoot = 'https://bbin17.github.io/aerchan-a10-gk5-releases/firmware/';
 let deviceVersion = '', available = null, checking = false, accepted = false, network = null;
+const presetEditor = byId('preset-editor');
+const presetName = byId('preset-name');
+const presetInputs = [...presetEditor.querySelectorAll('input[type="number"]')];
+const presetFeedback = byId('preset-feedback');
+let editingPreset = null;
 
 const checkName = value => value.length > 0 && encoder.encode(value).length <= 20 && !/[\u0000-\u001f\u007f-\u009f]/u.test(value);
+const defaultName = index => '预设 '+(index+1);
 const rows = Array.from({length:3},(_,i)=>{
   const el=document.createElement('div');
   el.className='range';
-  el.innerHTML='<div class="row"><h3>预设 '+(i+1)+'</h3><button type="button" class="activate">启用</button></div><div class="name-field"><label>预设名称<input class="name" maxlength="20" autocomplete="off"></label><button type="button" class="rename">保存名称</button></div><div class="fields"></div><div class="row"><span class="feedback" role="status"></span><button type="button" class="save">保存阈值</button></div>';
-  const inputs=['起亮','全亮','爆闪'].map((name,j)=>{
-    const label=document.createElement('label'), input=document.createElement('input');
-    label.textContent=name; input.type='number'; input.inputMode='numeric'; input.min=250+j; input.max=12000; input.required=true;
-    input.setAttribute('aria-label','预设 '+(i+1)+' '+name+'转速');
-    label.append(input); el.querySelector('.fields').append(label); return input;
-  });
+  el.innerHTML='<div class="row"><div class="preset-info"><h3></h3><p class="preset-summary"></p></div><div class="preset-actions"><button type="button" class="edit">编辑</button><button type="button" class="activate">启用</button></div></div><p class="feedback" role="status"></p>';
   byId('ranges').append(el);
-  const save=el.querySelector('.save'), activate=el.querySelector('.activate'), feedback=el.querySelector('.feedback');
-  save.onclick=()=>editRange(i,false);
-  activate.onclick=()=>editRange(i,true);
-  const name=el.querySelector('.name'), rename=el.querySelector('.rename');
-  name.value='预设 '+(i+1);
-  name.setAttribute('aria-label','预设 '+(i+1)+' 名称');
-  rename.onclick=()=>renamePreset(i);
-  return {inputs,save,activate,feedback,name,rename,title:el.querySelector('h3')};
+  const edit=el.querySelector('.edit'), activate=el.querySelector('.activate');
+  edit.onclick=()=>openPreset(i);
+  activate.onclick=()=>activatePreset(i);
+  return {edit,activate,feedback:el.querySelector('.feedback'),title:el.querySelector('h3'),
+    summary:el.querySelector('.preset-summary'),name:defaultName(i),values:[]};
 });
+function renderPreset(index) {
+  const row=rows[index];
+  row.title.textContent=row.name;
+  row.summary.textContent=row.values.length ? row.values.join(' / ') : '—';
+  row.edit.setAttribute('aria-label','编辑 '+row.name);
+}
+rows.forEach((_,i)=>renderPreset(i));
 const message = text=>{byId('message').textContent=text;};
 function controls() {
   const connected = Boolean(service);
   byId('connect').disabled=busy || (!connected && !navigator.bluetooth);
   byId('connect').textContent=connected?'断开连接':'连接转速灯';
   rows.forEach((row,i)=>{
-    row.inputs.forEach(inp=>inp.disabled=busy||!connected);
-    row.save.disabled=busy||!connected;
-    row.name.disabled=row.rename.disabled=busy||!connected||!chars.has(uuid(15+i));
+    row.edit.disabled=busy||!connected;
     row.activate.disabled=busy||!connected||i+1===active;
     row.activate.textContent=i+1===active?'使用中':'启用';
+    row.activate.classList.toggle('in-use',i+1===active);
   });
+  presetName.disabled=busy||editingPreset===null||!chars.has(uuid(15+editingPreset));
+  presetInputs.forEach(input=>{input.disabled=busy;});
+  byId('preset-save').disabled=busy;
+  byId('preset-cancel').disabled=busy;
   byId('check').disabled=busy||checking||!connected||accepted;
   byId('send').hidden=!available||!ctl||accepted;
   byId('send').disabled=busy||checking||!available||!ctl||accepted;
@@ -93,7 +126,12 @@ function disconnected(event) {
   deviceVersion='';available=null;checking=accepted=false;network=null;
   byId('progress').hidden=true;
   device=service=ctl=data=null; chars.clear(); active=0; busy=sending=cancelling=committing=false;
-  rows.forEach((row,i)=>{row.title.textContent=row.name.value='预设 '+(i+1);row.inputs.forEach(x=>x.value='');row.feedback.textContent='';});
+  if(presetEditor.open)presetEditor.close();
+  editingPreset=null;
+  rows.forEach((row,i)=>{
+    row.name=defaultName(i);row.values=[];row.feedback.textContent='';
+    renderPreset(i);
+  });
   byId('connection').textContent='尚未连接'; controls();
 }
 const readText=async ch=>decoder.decode(await ch.readValue());
@@ -123,17 +161,15 @@ byId('connect').onclick=async()=>{
     const names=[];
     for(let i=0;i<3;i++) {
       const name=chars.get(uuid(15+i));
-      names.push(name ? await readText(name) : '预设 '+(i+1));
+      names.push(name ? await readText(name) : defaultName(i));
     }
     checkSession(id);
     if(![1,2,3].includes(current)||!ranges.every(validRange))throw Error('设备返回了无效预设');
     active=current;
-    names.forEach((name,i)=>{rows[i].title.textContent=rows[i].name.value=name;});
     deviceVersion=version;
-    ranges.forEach((values,i)=>values.forEach((v,j)=>rows[i].inputs[j].value=v));
+    rows.forEach((row,i)=>{row.name=names[i];row.values=ranges[i];renderPreset(i);});
     service=found; ctl=chars.get(uuid(13)); data=chars.get(uuid(14)); if(!data)ctl=null;
     byId('connection').textContent='已连接 · '+version;
-    if(!chars.has(uuid(15))) rows.forEach(row=>row.feedback.textContent='升级至 v1.0.11 后可修改名称。');
     checkUpdates();
   } catch(error) {
     if(id!==generation)return;
@@ -143,35 +179,71 @@ byId('connect').onclick=async()=>{
     byId('connection').textContent=error.name==='NotFoundError'?'未选择设备，或设备未通电。':'连接失败，请核对配对码并重试。'+error.message;
   } finally {if(id===generation){busy=false;controls();}}
 };
-async function editRange(index,activate) {
+async function activatePreset(index) {
   if(busy||!service)return;
-  const row=rows[index],values=row.inputs.map(x=>x.valueAsNumber);
-  if(!activate&&!validRange(values)){row.feedback.textContent='请填写递增的三个转速（250–12000 RPM）。';return;}
+  const row=rows[index];
   const id=generation;busy=true;controls();
   try{
-    const ch=chars.get(uuid(activate?2:index+3));
-    const value=activate?String(index+1):values.join(',');
+    const ch=chars.get(uuid(2)), value=String(index+1);
     await write(ch,encoder.encode(value));
     const confirmed=await readText(ch);checkSession(id);
     if(confirmed!==value) throw Error('读回值与提交值不同');
-    if(activate)active=index+1;
-    row.feedback.textContent=activate?'已启用':'阈值已保存';
+    active=index+1;
+    row.feedback.textContent='';
   }catch(e){if(id===generation)row.feedback.textContent='操作失败。'+e.message;}
   finally{if(id===generation){busy=false;controls();}}
 }
-async function renamePreset(index) {
-  const row=rows[index], name=row.name.value.trim(), ch=chars.get(uuid(15+index));
-  if(busy||!service||!ch)return;
-  if(!checkName(name)){row.feedback.textContent='名称可用 1–20 个 UTF-8 字节，通常最多 6 个汉字。';return;}
-  const id=generation;busy=true;controls();
-  try {
-    await write(ch,encoder.encode(name));
-    const stored=await readText(ch);checkSession(id);
-    if(stored!==name)throw Error('读回的名称不同');
-    row.name.value=row.title.textContent=stored;row.feedback.textContent='名称已保存到转速灯';
-  } catch(e){if(id===generation)row.feedback.textContent='保存失败。'+e.message;}
-  finally{if(id===generation){busy=false;controls();}}
+
+function openPreset(index) {
+  if(busy||!service)return;
+  editingPreset=index;
+  const row=rows[index];
+  presetName.value=row.name;
+  presetInputs.forEach((input,i)=>{input.value=row.values[i];});
+  presetFeedback.textContent=chars.has(uuid(15+index))?'':'当前固件仅支持修改转速阈值。';
+  controls();
+  presetEditor.showModal();
 }
+
+byId('preset-cancel').onclick=()=>presetEditor.close();
+presetEditor.addEventListener('cancel',event=>{if(busy)event.preventDefault();});
+presetEditor.addEventListener('close',()=>{if(!presetEditor.open)editingPreset=null;});
+byId('preset-form').onsubmit=async event=>{
+  event.preventDefault();
+  const index=editingPreset;
+  if(busy||!service||index===null)return;
+  const row=rows[index], values=presetInputs.map(input=>input.valueAsNumber);
+  const name=presetName.value.trim(), nameField=chars.get(uuid(15+index));
+  if(!validRange(values)){presetFeedback.textContent='请填写递增的三个转速（250–12000 RPM）。';return;}
+  if(nameField&&!checkName(name)){presetFeedback.textContent='请输入名称，最多 20 字节（约 6 个汉字）。';return;}
+
+  const id=generation;busy=true;controls();
+  let thresholdsSaved=false;
+  try {
+    const thresholds=values.join(',');
+    if(thresholds!==row.values.join(',')){
+      const ch=chars.get(uuid(3+index));
+      await write(ch,encoder.encode(thresholds));
+      const stored=await readText(ch);checkSession(id);
+      if(stored!==thresholds)throw Error('读回的转速阈值不同');
+      row.values=values;
+      renderPreset(index);
+      thresholdsSaved=true;
+    }
+    if(nameField&&name!==row.name){
+      await write(nameField,encoder.encode(name));
+      const stored=await readText(nameField);checkSession(id);
+      if(stored!==name)throw Error('读回的名称不同');
+      row.name=stored;
+      renderPreset(index);
+    }
+    row.feedback.textContent='预设已保存';
+    presetEditor.close();
+  } catch(e){
+    if(id===generation)presetFeedback.textContent=(thresholdsSaved?'阈值已保存，名称保存失败。':'保存失败。')+e.message;
+  }
+  finally{if(id===generation){busy=false;controls();}}
+};
 
 function isNewer(tag,current) {
   const latest=/^v(\d{1,5})\.(\d{1,5})\.(\d{1,5})$/.exec(tag);
